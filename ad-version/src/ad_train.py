@@ -52,20 +52,28 @@ class ModelTraining(object):
 
     def read_train(self):
         self.db.read_data(train=True)
+        # self.db.read_data(train=False)
         while self.db.data is None or len(self.db.data.dropna()) < 1000:
+            print("check data is none : ", self.db.data is None)
+            print("count data : ", len(self.db.data.dropna()))
+            
             logger.warning("Check if InfluxDB instance is up / Not sufficient data for Training")
             time.sleep(120)
             self.db.read_data(train=True)
+            # self.db.read_data(train=False)
+
         self.train_data = self.db.data
         logger.debug("Training on {} Samples".format(self.train_data.shape[0]))
 
     def read_test(self):
         """ Read test dataset for model validation"""
         self.db.read_data(valid=True)
+        # self.db.read_data(valid=False)
         while self.db.data is None or len(self.db.data.dropna()) < 300:
             logger.warning("Check if InfluxDB instance is up? or Not sufficient data for Validation in last 10 minutes")
             time.sleep(60)
             self.db.read_data(valid=True)
+            # self.db.read_data(valid=False)
         self.test_data = self.db.data.dropna()
         logger.debug("Validation on {} Samples".format(self.test_data.shape[0]))
 
@@ -108,8 +116,14 @@ class ModelTraining(object):
         ps = PREPROCESS(self.train_data)
         ps.process()
         self.train_data = ps.data
+        # Print column names from the DataFrame in your object
+        print("Column names in self.test_data:")
+        print(self.test_data.columns)
 
-        self.actual = (self.test_data[self.db.anomaly] > 0).astype(int)
+        # self.actual = (self.test_data[self.db.anomaly] > 0).astype(int)
+        # Update column name to 'Viavi.UE.anomalies'
+        self.actual = (self.test_data['Viavi.UE.anomalies'] > 0).astype(int)
+
         num = joblib.load('src/num_params')
         ps = PREPROCESS(self.test_data[num])
         ps.transform()

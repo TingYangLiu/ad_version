@@ -21,64 +21,125 @@ This Module is temporary for pushing data into influxdb before dpeloyment of AD 
 import datetime
 import time
 import pandas as pd
-from database import DATABASE
+from influxdb_client import InfluxDBClient, Point
 from configparser import ConfigParser
 
-
-class INSERTDATA(DATABASE):
-
+class INSERTDATA:
     def __init__(self):
-        super().__init__()
         self.config()
         self.connect()
-#        self.dropdb('RIC-Test')
-        self.createdb('RIC-Test')
 
     def config(self):
         cfg = ConfigParser()
         cfg.read('ad_config.ini')
-        for section in cfg.sections():
-            if section == 'influxdb':
-                self.host = cfg.get(section, "host")
-                self.port = cfg.get(section, "port")
-                self.user = cfg.get(section, "user")
-                self.password = cfg.get(section, "password")
-                self.path = cfg.get(section, "path")
-                self.ssl = cfg.get(section, "ssl")
-                self.dbname = cfg.get(section, "database")
-                self.meas = cfg.get(section, "measurement")
+        if cfg.has_section('influxdb'):
+            self.url = cfg.get('influxdb', "url")
+            self.token = cfg.get('influxdb', "token")
+            self.org = cfg.get('influxdb', "org")
+            self.bucket = cfg.get('influxdb', "bucket")
+            self.meas = cfg.get('influxdb', "measurement")
 
-    def createdb(self, dbname):
-        if dbname not in self.client.get_list_database():
-            print("Create database: " + dbname)
-            self.client.create_database(dbname)
-            self.client.switch_database(dbname)
-
-    def dropdb(self, dbname):
-        if next((item for item in self.client.get_list_database() if item.get("name") == dbname), None) is not None:
-            print("DROP database: " + dbname)
-            self.client.drop_database(dbname)
+    def connect(self):
+        self.client = InfluxDBClient(url=self.url, token=self.token, org=self.org)
+        self.write_api = self.client.write_api()
+        self.query_api = self.client.query_api()
+        print("Connected to InfluxDB at {}".format(self.url))
 
     def dropmeas(self, measname):
-        print("DROP MEASUREMENT: " + measname)
-        self.client.query('DROP MEASUREMENT '+measname)
+        query = f'from(bucket: "{self.bucket}") |> range(start: -1y) |> filter(fn: (r) => r._measurement == "{measname}") |> drop()'
+        self.query_api.query(query)
+        print("Dropped measurement: " + measname)
 
     def assign_timestamp(self, df):
+        df = df.copy()
         steps = df['measTimeStampRf'].unique()
         for timestamp in steps:
             d = df[df['measTimeStampRf'] == timestamp]
             d.index = pd.date_range(start=datetime.datetime.now(), freq='1ms', periods=len(d))
-            self.client.write_points(d, self.meas)
+            points = [
+                Point(self.meas)
+                .tag("tag_key", "tag_value")
+                .field(col, row[col])
+                .time(row.name)
+                for _, row in d.iterrows()
+                for col in d.columns
+            ]
+            self.write_api.write(bucket=self.bucket, record=points)
             time.sleep(0.7)
 
-
 def populatedb():
-    # inintiate connection and create database UEDATA
+    # Initiate connection and process data
     db = INSERTDATA()
     df = pd.read_csv('ue.csv')
     while True:
         db.assign_timestamp(df)
 
-
 if __name__ == "__main__":
     populatedb()
+
+
+
+# import datetime
+# import time
+# import pandas as pd
+# from database import DATABASE
+# from configparser import ConfigParser
+
+
+# class INSERTDATA(DATABASE):
+
+#     def __init__(self):
+#         super().__init__()
+#         self.config()
+#         self.connect()
+#         self.dropdb('RIC-Test')
+#         self.createdb('RIC-Test')
+
+#     def config(self):
+#         cfg = ConfigParser()
+#         cfg.read('ad_config.ini')
+#         for section in cfg.sections():
+#             if section == 'influxdb':
+#                 self.host = cfg.get(section, "host")
+#                 self.port = cfg.get(section, "port")
+#                 self.user = cfg.get(section, "user")
+#                 self.password = cfg.get(section, "password")
+#                 self.path = cfg.get(section, "path")
+#                 self.ssl = cfg.get(section, "ssl")
+#                 self.dbname = cfg.get(section, "database")
+#                 self.meas = cfg.get(section, "measurement")
+
+#     def createdb(self, dbname):
+#         if dbname not in self.client.get_list_database():
+#             print("Create database: " + dbname)
+#             self.client.create_database(dbname)
+#             self.client.switch_database(dbname)
+
+#     def dropdb(self, dbname):
+#         if next((item for item in self.client.get_list_database() if item.get("name") == dbname), None) is not None:
+#             print("DROP database: " + dbname)
+#             self.client.drop_database(dbname)
+
+#     def dropmeas(self, measname):
+#         print("DROP MEASUREMENT: " + measname)
+#         self.client.query('DROP MEASUREMENT '+measname)
+
+#     def assign_timestamp(self, df):
+#         steps = df['measTimeStampRf'].unique()
+#         for timestamp in steps:
+#             d = df[df['measTimeStampRf'] == timestamp]
+#             d.index = pd.date_range(start=datetime.datetime.now(), freq='1ms', periods=len(d))
+#             self.client.write_points(d, self.meas)
+#             time.sleep(0.7)
+
+
+# def populatedb():
+#     # inintiate connection and create database UEDATA
+#     db = INSERTDATA()
+#     df = pd.read_csv('ue.csv')
+#     while True:
+#         db.assign_timestamp(df)
+
+
+# if __name__ == "__main__":
+#     populatedb()

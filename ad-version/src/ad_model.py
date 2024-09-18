@@ -16,6 +16,10 @@
 
 import joblib
 from mdclogpy import Logger
+from influxdb_client.client.query_api import QueryApi
+import pandas as pd 
+import numpy as np
+
 
 logger = Logger(name=__name__)
 
@@ -34,6 +38,7 @@ class modelling(object):
         self.load_model()
         self.load_param()
         self.load_scale()
+
 
     def load_model(self):
         try:
@@ -97,34 +102,91 @@ class CAUSE(object):
         """
         sample = df.copy()
         sample.index = range(len(sample))
-        for i in range(len(sample)):
+        for i in range(min(len(sample), 10)):
             if sample.iloc[i]['Anomaly'] == 1:
-                query = """select * from {} where "{}" = \'{}\' and time<now() and time>now()-20s""".format(db.meas, db.ue, sample.iloc[i][db.ue])
+                db_ue = 'tag_key'  # Set this to the correct column name if needed
+                print("meas", db.meas)
+                print("db_ue", db_ue)
+                print("sample", sample)
+                print("sample.iloc[i]", sample.iloc[i])
+                print("sample.iloc[i][db_ue]", sample.iloc[i][db_ue])
+                print("db", db)
+
+                #default 20s
+                query = f"""
+                from(bucket: "{db.bucket}")
+                |> range(start: -240h)
+                |> filter(fn: (r) => r["_measurement"] == "{db.meas}" and r["{db_ue}"] == "{sample.iloc[i][db_ue]}")
+                |> pivot(rowKey:["_time"], columnKey: ["_field"], valueColumn: "_value")
+                """ 
+
+                print(query)  # Print the query to verify its correctness
+
                 normal = db.query(query)
-                if normal:
-                    normal = normal[db.meas][[db.thpt, db.rsrp, db.rsrq]]
+
+                print("print normal", normal)
+                print(normal.columns)
+
+                if normal is not None and not normal.empty:
+                    # Extract relevant columns from the 'normal' DataFrame
+                    print("db.meas", db.meas)
+                    normal = normal[[db.thpt, db.rsrp, db.rsrq]]
+                    normal = normal.dropna()
+
+                    print("normal 2", normal)
+                    # Find the degradation using the 'find' method
+                    print("threshold", threshold) 
+
                     deg = self.find(sample.loc[i, :], normal.max(), db, threshold)
+
                     if deg:
+                        # Set 'Degradation' value in the sample DataFrame
                         sample.loc[i, 'Degradation'] = deg
+
+                        # Determine the 'Anomaly' type based on the degradation information
                         if 'Throughput' in deg and ('RSRP' in deg or 'RSRQ' in deg):
-                            sample.loc[i, 'Anomaly'] = 2
+                            sample.loc[i, 'Anomaly'] = 2  # Both types of anomalies detected
                         else:
-                            sample.loc[i, 'Anomaly'] = 1
+                            sample.loc[i, 'Anomaly'] = 1  # Only one type of anomaly detected
                     else:
+                        # No degradation found
                         sample.loc[i, 'Anomaly'] = 0
+
+                else:
+                    # Handle cases where 'normal' is None or empty
+                    sample.loc[i, 'Anomaly'] = 0
+
+        print("SAMPLE: ", sample)
         return sample[['Anomaly', 'Degradation']].values.tolist()
 
     def find(self, row, l, db, threshold):
-        """ store if a particular parameter is below threshold and return """
+        """ Store if a particular parameter is below threshold and return """
         deg = []
-        if row[db.thpt] < l[db.thpt]*(100 - threshold)*0.01:
+        print("row", row)
+        print("thtpt", db.thpt)
+        print("rsrp", db.rsrp)
+        print("threshold", threshold)
+        
+        # Ensure row and l are Series and we are comparing individual elements
+        thpt_val = row[db.thpt].iloc[0] if isinstance(row[db.thpt], pd.Series) else row[db.thpt]
+        l_thpt_val = l[db.thpt].iloc[0] if isinstance(l[db.thpt], pd.Series) else l[db.thpt]
+        if thpt_val < l_thpt_val * (100 - threshold) * 0.01:
             deg.append('Throughput')
-        if row[db.rsrp] < l[db.rsrp]-15:
+
+        rsrp_val = row[db.rsrp].iloc[0] if isinstance(row[db.rsrp], pd.Series) else row[db.rsrp]
+        l_rsrp_val = l[db.rsrp].iloc[0] if isinstance(l[db.rsrp], pd.Series) else l[db.rsrp]
+        if rsrp_val < l_rsrp_val - 15:
             deg.append('RSRP')
-        if row[db.rsrq] < l[db.rsrq]-10:
+
+        rsrq_val = row[db.rsrq].iloc[0] if isinstance(row[db.rsrq], pd.Series) else row[db.rsrq]
+        l_rsrq_val = l[db.rsrq].iloc[0] if isinstance(l[db.rsrq], pd.Series) else l[db.rsrq]
+        if rsrq_val < l_rsrq_val - 10:
             deg.append('RSRQ')
+        
         if len(deg) == 0:
             deg = False
         else:
             deg = ' '.join(deg)
         return deg
+
+
